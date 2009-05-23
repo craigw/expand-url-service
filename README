@@ -1,5 +1,5 @@
-Geocoding Service
-=================
+Epanding URLs
+==============
 
 A service that sits on the enterprise service bus and swaps shortened URLs for
 their actual destinations.
