@@ -1,0 +1,118 @@
+#! /usr/bin/env ruby
+
+require 'rubygems'
+require 'smqueue'
+require 'json/pure'
+require 'yaml'
+require 'starling'
+require 'graticule'
+require 'net/http'
+
+# http://barkingiguana.com/2009/05/07/expanding-shortened-urls-in-a-ruby-string
+module BarkingIguana
+  module ExpandUrl
+    def expand_urls!
+      ExpandUrl.services.each do |service|
+        gsub!(service[:pattern]) { |match|
+          puts match.inspect
+          result = ExpandUrl.expand($2, service[:host]) || $1
+          puts result.inspect
+          result
+        }
+      end
+    end
+
+    def expand_urls
+      s = dup
+      s.expand_urls!
+      s
+    end
+
+    def ExpandUrl.services
+      [
+        { :host => "tinyurl.com", :pattern => %r'(http://tinyurl\.com(/[\w/]+))' },
+        { :host => "is.gd", :pattern => %r'(http://is\.gd(/[\w/]+))' },
+        { :host => "bit.ly", :pattern => %r'(http://bit\.ly(/[\w/]+))' },
+        { :host => "ff.im", :pattern => %r'(http://ff\.im(/[\w/]+))'},
+      ]
+    end
+
+    def ExpandUrl.expand(path, host)
+      result = ::Net::HTTP.new(host).head(path)
+      case result
+      when ::Net::HTTPRedirection
+        result['Location']
+      end
+    end
+  end
+end
+
+class String
+  include BarkingIguana::ExpandUrl
+end
+
+module SMQueue
+  class StarlingAdapter < ::SMQueue::Adapter
+    class Configuration < ::SMQueue::AdapterConfiguration
+      DEFAULT_SERVER = '127.0.0.1:22122'
+
+      has :name
+      has :server, :default => DEFAULT_SERVER
+    end
+
+    def initialize(*args)
+      super
+      options = args.first
+      @configuration = options[:configuration]
+      @configuration[:server] ||= Configuration::DEFAULT_SERVER
+
+      @client = ::Starling.new(@configuration[:server])
+    end
+
+    def put(*args, &block)
+      @client.set @configuration[:name], args[0].to_json
+    end
+
+    def get(*args, &block)
+      if block_given?
+        loop do
+          yield next_message
+        end
+      else
+        next_message
+      end
+    end
+
+    private
+    def next_message
+      ::SMQueue::Message(:headers => {},
+        :body => JSON.parse(@client.get(@configuration[:name])))
+    end
+  end
+end
+
+raw_configuration = File.read(File.dirname(__FILE__) + '/../config/message_queue.yml')
+configuration = YAML.load(raw_configuration)
+
+input = SMQueue(configuration)
+input.get do |request|
+  job = request.body
+  document = job["document"]
+  reply_to = job["reply_to"]
+  correlation_id = job["request_id"]
+  reply = begin
+    document.expand_urls!
+    {
+      "document" => document
+    }
+  rescue => e
+    {
+      "message_type" => "error",
+      "message" => e.message
+    }
+  end
+  reply.merge!("correlation_id" => correlation_id)
+  reply_configuration = configuration.merge(:name => reply_to)
+  reply_channel = SMQueue(:configuration => reply_configuration)
+  reply_channel.put reply
+end

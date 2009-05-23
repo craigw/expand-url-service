@@ -1,0 +1,8 @@
+* Clean up the StarlingAdapter and get it into SMQueue (or at least it's own
+  Gem).
+
+* Clean up the ExpandUrl module and get it into it's own Gem.
+
+* Encapsulate all that message handling in an easily testable container.
+
+* Tests!
